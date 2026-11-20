@@ -70,6 +70,39 @@ jobs:
         if: runner.os == 'macOS'
         run: codesign --force --deep --sign - build/ResonatorIntoTexture_artefacts/Release/VST3/ResonatorIntoTexture.vst3
 
+      - name: Verify binary
+        shell: bash
+        run: |
+          V=build/ResonatorIntoTexture_artefacts/Release/VST3/ResonatorIntoTexture.vst3
+          find "$V" -type f | head -20
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            lipo -info "$V/Contents/MacOS/ResonatorIntoTexture"
+            codesign --verify --verbose "$V"
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            file "$V/Contents/x86_64-linux/ResonatorIntoTexture.so"
+            echo "glibc máx.: $(objdump -T "$V/Contents/x86_64-linux/ResonatorIntoTexture.so" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          fi
+
+      - name: Validate with pluginval
+        shell: bash
+        run: |
+          V="$PWD/build/ResonatorIntoTexture_artefacts/Release/VST3/ResonatorIntoTexture.vst3"
+          case "$RUNNER_OS" in
+            Linux)
+              curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+              unzip -q pv.zip
+              sudo apt-get install -y xvfb > /dev/null
+              xvfb-run -a ./pluginval --strictness-level 5 --validate-in-process "$V" ;;
+            macOS)
+              curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+              unzip -q pv.zip
+              ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process "$V" ;;
+            Windows)
+              curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+              7z x pv.zip > /dev/null
+              ./pluginval.exe --strictness-level 5 --validate-in-process "$V" ;;
+          esac
+
       - name: Package
         shell: bash
         run: |
