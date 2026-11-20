@@ -1,0 +1,105 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Versiones fijadas para compilaciones reproducibles
+  JUCE_REF: 654bdbc7a9db0dae90849b44abe91f339e9f0768
+  EURORACK_REF: f4cfa7697095a28d292bff758beb51deb49b5a86
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: windows-x64
+            os: windows-2022
+          - name: macos-universal
+            os: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxext-dev libfreetype6-dev libfontconfig1-dev \
+            libasound2-dev libgl1-mesa-dev
+
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja || true
+
+      - name: Fetch JUCE and pichenettes/eurorack
+        shell: bash
+        run: |
+          git clone https://github.com/juce-framework/JUCE.git external/JUCE
+          git -C external/JUCE checkout "$JUCE_REF"
+          git clone https://github.com/pichenettes/eurorack.git external/eurorack
+          git -C external/eurorack checkout "$EURORACK_REF"
+          git -C external/eurorack submodule update --init --depth 1
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (macOS, universal)
+        if: runner.os == 'macOS'
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Configure (Windows, clang-cl)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -T ClangCL
+
+      - name: Build VST3
+        run: cmake --build build --config Release --target ResonatorIntoTexture_VST3 --parallel 4
+
+      - name: Ad-hoc sign (macOS)
+        if: runner.os == 'macOS'
+        run: codesign --force --deep --sign - build/ResonatorIntoTexture_artefacts/Release/VST3/ResonatorIntoTexture.vst3
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist/ResonatorIntoTexture
+          cp -R build/ResonatorIntoTexture_artefacts/Release/VST3/ResonatorIntoTexture.vst3 dist/ResonatorIntoTexture/
+          cp LEEME.md README.md LICENSE.md docs/*.pdf dist/ResonatorIntoTexture/
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip "ResonatorIntoTexture-${{ matrix.name }}.zip" ResonatorIntoTexture > /dev/null
+          else
+            zip -qry "ResonatorIntoTexture-${{ matrix.name }}.zip" ResonatorIntoTexture
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ResonatorIntoTexture-${{ matrix.name }}
+          path: dist/ResonatorIntoTexture-${{ matrix.name }}.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true

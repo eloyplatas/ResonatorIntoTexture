@@ -1,0 +1,8 @@
+build/
+build-*/
+external/
+dist/
+*.wav
+.DS_Store
+.vscode/
+__pycache__/
